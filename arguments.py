@@ -2,6 +2,11 @@ import argparse
 
 import torch
 
+def str2bool(v):
+    if v.lower() in ['t', 'y', 'yes', 'true']:
+        return True
+    else:
+        return False
 
 def get_args():
     parser = argparse.ArgumentParser(description='RL')
@@ -63,6 +68,14 @@ def get_args():
                         help='disables visdom visualization')
     parser.add_argument('--port', type=int, default=8097,
                         help='port to run the server on (default: 8097)')
+    ##############################################################################
+    ######################## Curiosity specific hyperparams ######################
+    ##############################################################################
+    parser.add_argument('--use_curiosity', type=str2bool, default=False)
+    parser.add_argument('--curiosity_beta', type=float, default=0.2)
+    parser.add_argument('--curiosity_lambda', type=float, default=0.1)
+    parser.add_argument('--curiosity_eta', type=float, default=0.01)
+
     args = parser.parse_args()
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()

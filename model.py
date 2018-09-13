@@ -59,6 +59,24 @@ class Policy(nn.Module):
 
         return value, action, action_log_probs, rnn_hxs
 
+    def act_curiosity(self, inputs, rnn_hxs, masks, deterministic=False):
+        value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
+        dist = self.dist(actor_features)
+
+        if deterministic:
+            action = dist.mode()
+        else:
+            action = dist.sample()
+
+        action_log_probs = dist.log_probs(action)
+        dist_entropy = dist.entropy().mean()
+
+        return value, action, action_log_probs, rnn_hxs, actor_features
+
+    def get_features(self, inputs, rnn_hxs, masks):
+        _, actor_features, _ = self.base(inputs, rnn_hxs, masks)
+        return actor_features
+
     def get_value(self, inputs, rnn_hxs, masks):
         value, _, _ = self.base(inputs, rnn_hxs, masks)
         return value
@@ -72,6 +90,14 @@ class Policy(nn.Module):
 
         return value, action_log_probs, dist_entropy, rnn_hxs
 
+    def evaluate_actions_curiosity(self, inputs, rnn_hxs, masks, action):
+        value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
+        dist = self.dist(actor_features)
+
+        action_log_probs = dist.log_probs(action)
+        dist_entropy = dist.entropy().mean()
+
+        return value, action_log_probs, dist_entropy, rnn_hxs, actor_features
 
 class NNBase(nn.Module):
 
@@ -207,3 +233,47 @@ class MLPBase(NNBase):
         hidden_actor = self.actor(x)
 
         return self.critic_linear(hidden_critic), hidden_actor, rnn_hxs
+
+class ForwardModel(nn.Module):
+    """
+    Given s_{t} encoding and a_{t}, it predicts s_{t+1} encoding
+    """
+    def __init__(self, n_actions, state_size=512, hidden_size=256):
+        super(ForwardModel, self).__init__()
+
+        init_ = lambda m: init(m,
+            init_normc_,
+            lambda x: nn.init.constant_(x, 0))
+
+        self.main = nn.Sequential(
+                        init_(nn.Linear(state_size + n_actions, hidden_size)),
+                        nn.ReLU(inplace=True),
+                        init_(nn.Linear(hidden_size, state_size))
+                    )
+
+    def forward(self, s, a):
+        # s - batch_size x state_size
+        # a - batch_size x n_actions (one-hot encoding)
+        return self.main(torch.cat([s, a], dim=1))
+
+class InverseModel:
+    """
+    Given s_{t}, s_{t+1} encoding, it predicts a_{t}
+    """
+    def __init__(self, n_actions, state_size=512, hidden_size=256):
+        super(InverseModel, self).__init__()
+
+        init_ = lambda m: init(m,
+            init_normc_,
+            lambda x: nn.init.constant_(x, 0))
+
+        self.main = nn.Sequential(
+                        init_(nn.Linear(2*state_size, hidden_size)),
+                        nn.ReLU(inplace=True),
+                        init_(nn.Linear(hidden_size, n_actions))
+                    )
+
+    def forward(self, s, sp):
+        # s, sp - batch_size x state_size
+        return self.main(torch.cat([s, sp], dim=1))
+

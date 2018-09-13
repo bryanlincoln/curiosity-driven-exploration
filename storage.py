@@ -16,13 +16,15 @@ class RolloutStorage(object):
         self.action_log_probs = torch.zeros(num_steps, num_processes, 1)
         if action_space.__class__.__name__ == 'Discrete':
             action_shape = 1
+            self.n_actions = action_space.n
         else:
             action_shape = action_space.shape[0]
+            self.n_actions = None
         self.actions = torch.zeros(num_steps, num_processes, action_shape)
         if action_space.__class__.__name__ == 'Discrete':
             self.actions = self.actions.long()
         self.masks = torch.ones(num_steps + 1, num_processes, 1)
-
+        
         self.num_steps = num_steps
         self.step = 0
 
