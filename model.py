@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import pdb
 from distributions import Categorical, DiagGaussian
 from utils import init, init_normc_
 
@@ -248,7 +249,8 @@ class ForwardModel(nn.Module):
         self.main = nn.Sequential(
                         init_(nn.Linear(state_size + n_actions, hidden_size)),
                         nn.ReLU(inplace=True),
-                        init_(nn.Linear(hidden_size, state_size))
+                        init_(nn.Linear(hidden_size, state_size)),
+                        nn.ReLU(inplace=True)
                     )
 
     def forward(self, s, a):
@@ -256,7 +258,7 @@ class ForwardModel(nn.Module):
         # a - batch_size x n_actions (one-hot encoding)
         return self.main(torch.cat([s, a], dim=1))
 
-class InverseModel:
+class InverseModel(nn.Module):
     """
     Given s_{t}, s_{t+1} encoding, it predicts a_{t}
     """

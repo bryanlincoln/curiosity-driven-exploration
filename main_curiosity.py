@@ -5,6 +5,7 @@ import time
 import types
 from collections import deque
 
+import pdb
 import gym
 import numpy as np
 import torch
@@ -64,7 +65,7 @@ def main():
     actor_critic = Policy(envs.observation_space.shape, envs.action_space,
         base_kwargs={'recurrent': args.recurrent_policy})
 
-    if self.use_curiosity:
+    if args.use_curiosity:
         # Works only for discrete actions currently
         fwd_model = ForwardModel(envs.action_space.n, state_size=512, hidden_size=256)
         inv_model = InverseModel(envs.action_space.n, state_size=512, hidden_size=256)
@@ -81,7 +82,10 @@ def main():
                                args.entropy_coef, lr=args.lr,
                                eps=args.eps, alpha=args.alpha,
                                max_grad_norm=args.max_grad_norm, 
-                               fwd_model=fwd_model, inv_model=inv_model)
+                               fwd_model=fwd_model, inv_model=inv_model, 
+                               use_curiosity=args.use_curiosity,
+                               curiosity_beta=args.curiosity_beta, 
+                               curiosity_lambda=args.curiosity_lambda)
     elif args.algo == 'ppo':
         if args.use_curiosity:
             raise NotImplementedError
@@ -96,8 +100,8 @@ def main():
                                args.entropy_coef, acktr=True)
 
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
-                        envs.observation_space.shape, envs.action_space,
-                        actor_critic.recurrent_hidden_state_size)
+                              envs.observation_space.shape, envs.action_space,
+                              actor_critic.recurrent_hidden_state_size)
 
     obs = envs.reset()
     rollouts.obs[0].copy_(obs)
@@ -117,23 +121,31 @@ def main():
 
             # Obser reward and next obs
             obs, reward, done, infos = envs.step(action)
-            
+
             # If done then clean the history of observations.
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
-            
-            next_actor_features = get_features(obs, recurrent_hidden_states, masks)
 
-            # Augment reward with curiosity rewards
-            action_onehot = torch.zeros(num_processes, action_log_prob.shape[1], device=device)
-            action_onehot.scatter_(1, action.view(-1, 1).long(), 1)
-            pred_actor_features = fwd_model(actor_features, action_onehot)
-            curiosity_rewards = 0.5*torch.sum((pred_actor_features-next_actor_features)**2, dim=1)
-            reward = reward + args.curiosity_eta * curiosity_rewards
+            with torch.no_grad():
+                next_actor_features = actor_critic.get_features(obs, recurrent_hidden_states, masks)
+
+            if args.use_curiosity:
+                # Augment reward with curiosity rewards
+                action_onehot = torch.zeros(args.num_processes, envs.action_space.n, device=device)
+                action_onehot.scatter_(1, action.view(-1, 1).long(), 1)
+                with torch.no_grad():
+                    #print('=================================================================')
+                    #print('actor_features: ', actor_features)
+                    pred_actor_features = fwd_model(actor_features, action_onehot)
+                    curiosity_rewards = 0.5*torch.sum((pred_actor_features-next_actor_features)**2, dim=1).view(-1, 1)
+                    #print('pred_actor_features: ', pred_actor_features)
+                    #print('next_actor_features: ', next_actor_features)
+                # TODO: should the feature be updated based on the policy gradient?
+                reward = reward + args.curiosity_eta * curiosity_rewards
 
             for info in infos:
                 if 'episode' in info.keys():
                     episode_rewards.append(info['episode']['r'])
-
+            
             rollouts.insert(obs, recurrent_hidden_states, action, action_log_prob, value, reward, masks)
 
         with torch.no_grad():
@@ -143,7 +155,10 @@ def main():
 
         rollouts.compute_returns(next_value, args.use_gae, args.gamma, args.tau)
 
-        value_loss, action_loss, dist_entropy = agent.update(rollouts, device=device)
+        if not args.use_curiosity:
+            value_loss, action_loss, dist_entropy = agent.update(rollouts, device=device)
+        else:
+            value_loss, action_loss, dist_entropy, fwd_loss, inv_loss = agent.update(rollouts, device=device)
 
         rollouts.after_update()
 
@@ -177,6 +192,8 @@ def main():
                        np.min(episode_rewards),
                        np.max(episode_rewards), dist_entropy,
                        value_loss, action_loss))
+            if args.use_curiosity:
+                print("fwd loss: {:.5f}, inv loss: {:.5f}".format(fwd_loss, inv_loss))
 
         if args.eval_interval is not None and len(episode_rewards) > 1 and j % args.eval_interval == 0:
             eval_envs = make_vec_envs(args.env_name, args.seed + args.num_processes, args.num_processes,

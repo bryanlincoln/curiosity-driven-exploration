@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
+import pdb
 
 from .kfac import KFACOptimizer
 
@@ -56,7 +58,6 @@ class A2C_ACKTR():
         action_shape = rollouts.actions.size()[-1]
         num_steps, num_processes, _ = rollouts.rewards.size()
 
-        
         if not self.use_curiosity:
             values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
                 rollouts.obs[:-1].view(-1, *obs_shape),
@@ -68,20 +69,20 @@ class A2C_ACKTR():
                 rollouts.obs[:-1].view(-1, *obs_shape),
                 rollouts.recurrent_hidden_states[0].view(-1, self.actor_critic.recurrent_hidden_state_size),
                 rollouts.masks[:-1].view(-1, 1),
-                rollouts.actions.view(-1, action_shape),
-                self.fwd_model, self.inv_model)
+                rollouts.actions.view(-1, action_shape))
             
             # Compute fwd_preds, inv_preds
-            actions_onehot = torch.Tensor((num_steps, num_processes, rollouts.n_actions)).to(device)
+            actions_onehot = torch.zeros(num_steps, num_processes, rollouts.n_actions).to(device)
             actions_onehot.scatter_(2, rollouts.actions, 1)
+            # Ignoring the last transition for convenience of implementation
             states = actor_features.view(num_steps, num_processes, -1)[:-1]
             next_states = actor_features.view(num_steps, num_processes, -1)[1:]
-            states = states.view(num_steps*num_processes, -1)
-            next_states = next_states.view(num_steps*num_processes, -1)
-            actions_onehot = actions_onehot[:-1].view(num_steps*num_processes, -1)
+            states = states.view((num_steps-1)*num_processes, -1)
+            next_states = next_states.view((num_steps-1)*num_processes, -1)
+            actions_onehot = actions_onehot[:-1].view((num_steps-1)*num_processes, -1)
             # ================= Forward loss ===============
-            # actor_features -> num_steps*num_processes x 512 
-            # actions_onehot -> num_steps*num_processes x 512
+            # states -> (num_steps-1)*num_processes x 512 
+            # actions_onehot -> (num_steps-1)*num_processes x 512
             fwd_preds = self.fwd_model(states, actions_onehot)
             fwd_loss = 0.5*torch.mean(((fwd_preds - next_states) ** 2).sum(dim=1))
             # ================= Inverse loss ===============
@@ -119,10 +120,11 @@ class A2C_ACKTR():
             (value_loss * self.value_loss_coef + action_loss -
              dist_entropy * self.entropy_coef).backward()
         else:
-            (self.curiosity_lambda*(value_loss * self.value_loss_coef + 
-                action_loss - dist_entropy * self.entropy_coef) + 
-             self.curiosity_beta*fwd_loss + 
-             (1-self.curiosity_beta)*inv_loss).backward()
+            pg_term = self.curiosity_lambda*(value_loss * self.value_loss_coef + 
+                action_loss - dist_entropy * self.entropy_coef)
+            curiosity_term = self.curiosity_beta*fwd_loss + (1-self.curiosity_beta)*inv_loss
+            overall_loss = pg_term + curiosity_term
+            overall_loss.backward()
 
         if self.acktr == False:
             nn.utils.clip_grad_norm_(self.actor_critic.parameters(),
@@ -135,4 +137,7 @@ class A2C_ACKTR():
 
         self.optimizer.step()
 
-        return value_loss.item(), action_loss.item(), dist_entropy.item()
+        if not self.use_curiosity:
+            return value_loss.item(), action_loss.item(), dist_entropy.item()
+        else:
+            return value_loss.item(), action_loss.item(), dist_entropy.item(), fwd_loss.item(), inv_loss.item()
