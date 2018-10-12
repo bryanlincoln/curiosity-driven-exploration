@@ -1,11 +1,10 @@
+import pdb
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import pdb
 
 from .kfac import KFACOptimizer
-
 
 class A2C_ACKTR():
     def __init__(self,
@@ -65,7 +64,7 @@ class A2C_ACKTR():
                 rollouts.masks[:-1].view(-1, 1),
                 rollouts.actions.view(-1, action_shape))
         else:
-            values, action_log_probs, dist_entropy, _, actor_features = self.actor_critic.evaluate_actions_curiosity(
+            values, action_log_probs, dist_entropy, rnn_hxs, actor_features = self.actor_critic.evaluate_actions_curiosity(
                 rollouts.obs[:-1].view(-1, *obs_shape),
                 rollouts.recurrent_hidden_states[0].view(-1, self.actor_critic.recurrent_hidden_state_size),
                 rollouts.masks[:-1].view(-1, 1),
@@ -74,21 +73,28 @@ class A2C_ACKTR():
             # Compute fwd_preds, inv_preds
             actions_onehot = torch.zeros(num_steps, num_processes, rollouts.n_actions).to(device)
             actions_onehot.scatter_(2, rollouts.actions, 1)
-            # Ignoring the last transition for convenience of implementation
-            states = actor_features.view(num_steps, num_processes, -1)[:-1]
+            # Compute the last state hidden encoding as well
+            # NOTE: rnn_hxs = num_processes x hidden_size hidden vectors after the 2nd last
+            # transition
+            last_states = self.actor_critic.get_features(rollouts.obs[-1].view(-1, *obs_shape),
+                                           rnn_hxs, rollouts.masks[-1].view(-1, 1))
+            last_states = last_states.view(1, num_processes, -1)
+
+            states = actor_features.view(num_steps, num_processes, -1)
             next_states = actor_features.view(num_steps, num_processes, -1)[1:]
-            states = states.view((num_steps-1)*num_processes, -1)
-            next_states = next_states.view((num_steps-1)*num_processes, -1)
-            actions_onehot = actions_onehot[:-1].view((num_steps-1)*num_processes, -1)
+            next_states = torch.cat([next_states, last_states], dim=0)
+            states = states.view(num_steps*num_processes, -1)
+            next_states = next_states.view(num_steps*num_processes, -1)
+            actions_onehot = actions_onehot.view(num_steps*num_processes, -1)
             # ================= Forward loss ===============
-            # states -> (num_steps-1)*num_processes x 512 
-            # actions_onehot -> (num_steps-1)*num_processes x 512
+            # states -> num_steps*num_processes x 512 
+            # actions_onehot -> num_steps*num_processes x 512
             fwd_preds = self.fwd_model(states, actions_onehot)
             fwd_loss = 0.5*torch.mean(((fwd_preds - next_states) ** 2).sum(dim=1))
             # ================= Inverse loss ===============
-            # Inverse loss by pairing (s0, s1)->a0, (s1, s2)->a1, ..., (sN-2, sN-1)->aN-2
+            # Inverse loss by pairing (s0, s1)->a0, (s1, s2)->a1, ..., (sN-1, sN)->aN-1
             inv_preds = self.inv_model(states, next_states)
-            inv_loss = F.cross_entropy(inv_preds, rollouts.actions[:-1].view(-1).long())
+            inv_loss = F.cross_entropy(inv_preds, rollouts.actions.view(-1).long())
 
         values = values.view(num_steps, num_processes, 1)
         action_log_probs = action_log_probs.view(num_steps, num_processes, 1)
@@ -127,13 +133,10 @@ class A2C_ACKTR():
             overall_loss.backward()
 
         if self.acktr == False:
-            nn.utils.clip_grad_norm_(self.actor_critic.parameters(),
-                                     self.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
             if self.use_curiosity:
-                nn.utils.clip_grad_norm_(self.fwd_model.parameters(),
-                                         self.max_grad_norm)
-                nn.utils.clip_grad_norm_(self.inv_model.parameters(),
-                                         self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.fwd_model.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.inv_model.parameters(), self.max_grad_norm)
 
         self.optimizer.step()
 
