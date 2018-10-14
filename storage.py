@@ -1,19 +1,25 @@
+import pdb
 import torch
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
-
+from utils import RunningMeanStd
 
 def _flatten_helper(T, N, _tensor):
     return _tensor.view(T * N, *_tensor.size()[2:])
 
 
 class RolloutStorage(object):
-    def __init__(self, num_steps, num_processes, obs_shape, action_space, recurrent_hidden_state_size):
+    def __init__(self, num_steps, num_processes, obs_shape, action_space, recurrent_hidden_state_size, norm_rew=False):
         self.obs = torch.zeros(num_steps + 1, num_processes, *obs_shape)
         self.recurrent_hidden_states = torch.zeros(num_steps + 1, num_processes, recurrent_hidden_state_size)
         self.rewards = torch.zeros(num_steps, num_processes, 1)
         self.value_preds = torch.zeros(num_steps + 1, num_processes, 1)
         self.returns = torch.zeros(num_steps + 1, num_processes, 1)
         self.action_log_probs = torch.zeros(num_steps, num_processes, 1)
+        self.norm_rew = norm_rew
+
+        if self.norm_rew:
+            self.ret_running_mean_std = RunningMeanStd()
+
         if action_space.__class__.__name__ == 'Discrete':
             action_shape = 1
             self.n_actions = action_space.n
@@ -55,6 +61,19 @@ class RolloutStorage(object):
         self.masks[0].copy_(self.masks[-1])
 
     def compute_returns(self, next_value, use_gae, gamma, tau):
+        if self.norm_rew:
+            # NOTE: Not adding the estimated value after last time step here
+            reward_discounted_sum = torch.zeros(self.returns.size()).to(self.returns.device)
+            for step in reversed(range(self.rewards.size(0))):
+                reward_discounted_sum = reward_discounted_sum[step + 1] * \
+                    gamma * self.masks[step + 1] + self.rewards[step]
+            reward_discounted_sum_flat = reward_discounted_sum.view(-1)
+            ret_mean = torch.mean(reward_discounted_sum_flat).detach()
+            ret_std = torch.std(reward_discounted_sum_flat).detach()
+            ret_count= reward_discounted_sum_flat.shape[0]
+            self.ret_running_mean_std.update_from_moments(ret_mean, ret_std ** 2, ret_count)
+            self.rewards /= torch.sqrt(self.ret_running_mean_std.var)
+
         if use_gae:
             self.value_preds[-1] = next_value
             gae = 0
@@ -67,7 +86,6 @@ class RolloutStorage(object):
             for step in reversed(range(self.rewards.size(0))):
                 self.returns[step] = self.returns[step + 1] * \
                     gamma * self.masks[step + 1] + self.rewards[step]
-
 
     def feed_forward_generator(self, advantages, num_mini_batch):
         num_steps, num_processes = self.rewards.size()[0:2]

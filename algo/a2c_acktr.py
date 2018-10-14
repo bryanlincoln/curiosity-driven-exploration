@@ -16,6 +16,7 @@ class A2C_ACKTR():
                  alpha=None,
                  max_grad_norm=None,
                  acktr=False,
+                 norm_adv=False,
                  use_curiosity=False,
                  fwd_model=None,
                  inv_model=None,
@@ -24,6 +25,7 @@ class A2C_ACKTR():
 
         self.actor_critic = actor_critic
         self.acktr = acktr
+        self.norm_adv = norm_adv
         self.use_curiosity = use_curiosity
         if self.use_curiosity:
             self.fwd_model = fwd_model
@@ -101,6 +103,11 @@ class A2C_ACKTR():
 
         advantages = rollouts.returns[:-1] - values
         value_loss = advantages.pow(2).mean()
+
+        if self.norm_adv:
+            mean = torch.mean(advantages)
+            std = torch.std(advantages)
+            advantages = (advantages - mean)/std
 
         action_loss = -(advantages.detach() * action_log_probs).mean()
 

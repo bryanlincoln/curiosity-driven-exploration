@@ -75,6 +75,10 @@ def get_args():
     parser.add_argument('--curiosity_beta', type=float, default=0.2)
     parser.add_argument('--curiosity_lambda', type=float, default=0.1)
     parser.add_argument('--curiosity_eta', type=float, default=0.01)
+    parser.add_argument('--norm_adv', type=str2bool, default=False, 
+                        help='normalize the advantage values?')
+    parser.add_argument('--norm_rew', type=str2bool, default=False, 
+                        help='normalize the reward values?')
 
     args = parser.parse_args()
 

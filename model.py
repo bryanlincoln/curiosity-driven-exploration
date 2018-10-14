@@ -169,13 +169,17 @@ class CNNBase(NNBase):
         self.main = nn.Sequential(
             init_(nn.Conv2d(num_inputs, 32, 8, stride=4)),
             nn.ReLU(),
+            nn.BatchNorm2d(32),
             init_(nn.Conv2d(32, 64, 4, stride=2)),
             nn.ReLU(),
+            nn.BatchNorm2d(64),
             init_(nn.Conv2d(64, 32, 3, stride=1)),
             nn.ReLU(),
+            nn.BatchNorm2d(32),
             Flatten(),
             init_(nn.Linear(32 * 7 * 7, hidden_size)),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_size)
         )
 
         init_ = lambda m: init(m,

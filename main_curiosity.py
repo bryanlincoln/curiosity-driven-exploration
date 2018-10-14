@@ -19,6 +19,8 @@ from envs import make_vec_envs
 from model import Policy, ForwardModel, InverseModel
 from storage import RolloutStorage
 from visualize import visdom_plot
+import tensorboardX
+from tensorboardX import SummaryWriter
 
 args = get_args()
 
@@ -54,6 +56,8 @@ def main():
     torch.set_num_threads(1)
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
+    tbwriter = SummaryWriter(log_dir=args.save_dir)
+
     if args.vis:
         from visdom import Visdom
         viz = Visdom(port=args.port)
@@ -82,6 +86,7 @@ def main():
                                args.entropy_coef, lr=args.lr,
                                eps=args.eps, alpha=args.alpha,
                                max_grad_norm=args.max_grad_norm, 
+                               norm_adv=args.norm_adv,
                                fwd_model=fwd_model, inv_model=inv_model, 
                                use_curiosity=args.use_curiosity,
                                curiosity_beta=args.curiosity_beta, 
@@ -101,7 +106,7 @@ def main():
 
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
                               envs.observation_space.shape, envs.action_space,
-                              actor_critic.recurrent_hidden_state_size)
+                              actor_critic.recurrent_hidden_state_size, norm_rew=args.norm_rew)
 
     obs = envs.reset()
     rollouts.obs[0].copy_(obs)
@@ -121,9 +126,10 @@ def main():
 
             # Obser reward and next obs
             obs, reward, done, infos = envs.step(action)
+            reward = reward.to(device)
 
             # If done then clean the history of observations.
-            masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
+            masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done]).to(device)
 
             with torch.no_grad():
                 next_actor_features = actor_critic.get_features(obs, recurrent_hidden_states, masks)
@@ -192,8 +198,17 @@ def main():
                        np.min(episode_rewards),
                        np.max(episode_rewards), dist_entropy,
                        value_loss, action_loss))
+
+            tbwriter.add_scalar('mean reward', np.mean(episode_rewards), total_num_steps)
+            tbwriter.add_scalar('median reward', np.median(episode_rewards), total_num_steps)
+            tbwriter.add_scalar('dist_entropy', dist_entropy, total_num_steps)
+            tbwriter.add_scalar('value_loss', value_loss, total_num_steps)
+            tbwriter.add_scalar('action_loss', action_loss, total_num_steps)
+
             if args.use_curiosity:
                 print("fwd loss: {:.5f}, inv loss: {:.5f}".format(fwd_loss, inv_loss))
+                tbwriter.add_scalar('fwd_loss', fwd_loss, total_num_steps)
+                tbwriter.add_scalar('inv_loss', inv_loss, total_num_steps)
 
         if args.eval_interval is not None and len(episode_rewards) > 1 and j % args.eval_interval == 0:
             eval_envs = make_vec_envs(args.env_name, args.seed + args.num_processes, args.num_processes,
