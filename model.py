@@ -26,6 +26,7 @@ class Policy(nn.Module):
             raise NotImplementedError
 
         if action_space.__class__.__name__ == "Discrete":
+            self.n_actions = action_space.n
             num_outputs = action_space.n
             self.dist = Categorical(self.base.output_size, num_outputs)
         elif action_space.__class__.__name__ == "Box":
@@ -168,17 +169,16 @@ class CNNBase(NNBase):
 
         self.main = nn.Sequential(
             init_(nn.Conv2d(num_inputs, 32, 8, stride=4)),
-            nn.ReLU(),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.BatchNorm2d(32),
             init_(nn.Conv2d(32, 64, 4, stride=2)),
-            nn.ReLU(),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.BatchNorm2d(64),
-            init_(nn.Conv2d(64, 32, 3, stride=1)),
-            nn.ReLU(),
-            nn.BatchNorm2d(32),
+            init_(nn.Conv2d(64, 64, 3, stride=1)),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.BatchNorm2d(64),
             Flatten(),
-            init_(nn.Linear(32 * 7 * 7, hidden_size)),
-            nn.ReLU(),
+            init_(nn.Linear(64 * 7 * 7, hidden_size)),
             nn.BatchNorm1d(hidden_size)
         )
 
@@ -243,24 +243,47 @@ class ForwardModel(nn.Module):
     """
     Given s_{t} encoding and a_{t}, it predicts s_{t+1} encoding
     """
-    def __init__(self, n_actions, state_size=512, hidden_size=256):
+    def __init__(self, n_actions, state_size=512, hidden_size=512):
         super(ForwardModel, self).__init__()
 
         init_ = lambda m: init(m,
             init_normc_,
             lambda x: nn.init.constant_(x, 0))
 
-        self.main = nn.Sequential(
+        self.pre_rb = nn.Sequential(
                         init_(nn.Linear(state_size + n_actions, hidden_size)),
-                        nn.ReLU(inplace=True),
-                        init_(nn.Linear(hidden_size, state_size)),
-                        nn.ReLU(inplace=True)
+                        nn.LeakyReLU(0.2, inplace=True),
                     )
+        self.post_rb = init_(nn.Linear(hidden_size, state_size))
+
+        class ResidualBlock(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc1 = nn.Sequential(
+                                init_(nn.Linear(hidden_size + n_actions, hidden_size)),
+                                nn.LeakyReLU(0.2, inplace=True),
+                           )
+                self.fc2 = nn.Sequential(
+                                init_(nn.Linear(hidden_size + n_actions, hidden_size))
+                           )
+            def forward(self, feat, act):
+                x = feat
+                x = self.fc1(torch.cat([x, act], dim=1))
+                x = self.fc2(torch.cat([x, act], dim=1))
+                return feat + x
+
+        self.rb1 = ResidualBlock()
+        self.rb2 = ResidualBlock()
+        self.rb3 = ResidualBlock()
+        self.rb4 = ResidualBlock()
 
     def forward(self, s, a):
         # s - batch_size x state_size
         # a - batch_size x n_actions (one-hot encoding)
-        return self.main(torch.cat([s, a], dim=1))
+        x = self.pre_rb(torch.cat([s, a], dim=1))
+        x = self.rb1(x, a); x = self.rb2(x, a); x = self.rb3(x, a); x = self.rb4(x, a)
+        sp = self.post_rb(x)
+        return sp
 
 class InverseModel(nn.Module):
     """
@@ -282,4 +305,3 @@ class InverseModel(nn.Module):
     def forward(self, s, sp):
         # s, sp - batch_size x state_size
         return self.main(torch.cat([s, sp], dim=1))
-

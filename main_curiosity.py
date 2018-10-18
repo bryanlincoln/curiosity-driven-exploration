@@ -1,25 +1,26 @@
+import os
 import copy
 import glob
-import os
 import time
 import types
 from collections import deque
 
 import pdb
 import gym
-import numpy as np
 import torch
+import numpy as np
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
+import torch.nn.functional as F
 
 import algo
-from arguments import get_args
+import tensorboardX
+
 from envs import make_vec_envs
 from model import Policy, ForwardModel, InverseModel
 from storage import RolloutStorage
+from arguments import get_args
 from visualize import visdom_plot
-import tensorboardX
 from tensorboardX import SummaryWriter
 
 args = get_args()
@@ -38,18 +39,20 @@ if args.cuda:
 try:
     os.makedirs(args.log_dir)
 except OSError:
-    files = glob.glob(os.path.join(args.log_dir, '*.monitor.csv'))
-    for f in files:
-        os.remove(f)
+    pass
+#    files = glob.glob(os.path.join(args.log_dir, '*.monitor.csv'))
+#    for f in files:
+#        os.remove(f)
 
 eval_log_dir = args.log_dir + "_eval"
 
 try:
     os.makedirs(eval_log_dir)
 except OSError:
-    files = glob.glob(os.path.join(eval_log_dir, '*.monitor.csv'))
-    for f in files:
-        os.remove(f)
+    pass
+#    files = glob.glob(os.path.join(eval_log_dir, '*.monitor.csv'))
+#    for f in files:
+#        os.remove(f)
 
 
 def main():
@@ -86,18 +89,20 @@ def main():
                                args.entropy_coef, lr=args.lr,
                                eps=args.eps, alpha=args.alpha,
                                max_grad_norm=args.max_grad_norm, 
-                               norm_adv=args.norm_adv,
-                               fwd_model=fwd_model, inv_model=inv_model, 
+                               acktr=False, norm_adv=args.norm_adv,
                                use_curiosity=args.use_curiosity,
+                               fwd_model=fwd_model, inv_model=inv_model, 
                                curiosity_beta=args.curiosity_beta, 
                                curiosity_lambda=args.curiosity_lambda)
     elif args.algo == 'ppo':
-        if args.use_curiosity:
-            raise NotImplementedError
         agent = algo.PPO(actor_critic, args.clip_param, args.ppo_epoch, args.num_mini_batch,
                          args.value_loss_coef, args.entropy_coef, lr=args.lr,
-                               eps=args.eps,
-                               max_grad_norm=args.max_grad_norm)
+                         eps=args.eps,
+                         max_grad_norm=args.max_grad_norm,
+                         use_curiosity=args.use_curiosity,
+                         fwd_model=fwd_model, inv_model=inv_model, 
+                         curiosity_beta=args.curiosity_beta, 
+                         curiosity_lambda=args.curiosity_lambda)
     elif args.algo == 'acktr':
         if args.use_curiosity:
             raise NotImplementedError
@@ -131,21 +136,15 @@ def main():
             # If done then clean the history of observations.
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done]).to(device)
 
-            with torch.no_grad():
-                next_actor_features = actor_critic.get_features(obs, recurrent_hidden_states, masks)
-
             if args.use_curiosity:
+                with torch.no_grad():
+                    next_actor_features = actor_critic.get_features(obs, recurrent_hidden_states, masks).detach()
                 # Augment reward with curiosity rewards
                 action_onehot = torch.zeros(args.num_processes, envs.action_space.n, device=device)
                 action_onehot.scatter_(1, action.view(-1, 1).long(), 1)
                 with torch.no_grad():
-                    #print('=================================================================')
-                    #print('actor_features: ', actor_features)
-                    pred_actor_features = fwd_model(actor_features, action_onehot)
+                    pred_actor_features = fwd_model(actor_features, action_onehot).detach()
                     curiosity_rewards = 0.5*torch.sum((pred_actor_features-next_actor_features)**2, dim=1).view(-1, 1)
-                    #print('pred_actor_features: ', pred_actor_features)
-                    #print('next_actor_features: ', next_actor_features)
-                # TODO: should the feature be updated based on the policy gradient?
                 reward = reward + args.curiosity_eta * curiosity_rewards
 
             for info in infos:

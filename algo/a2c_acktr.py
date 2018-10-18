@@ -23,20 +23,13 @@ class A2C_ACKTR():
                  curiosity_beta=0.2,
                  curiosity_lambda=0.1):
 
-        self.actor_critic = actor_critic
-        self.acktr = acktr
-        self.norm_adv = norm_adv
-        self.use_curiosity = use_curiosity
-        if self.use_curiosity:
-            self.fwd_model = fwd_model
-            self.inv_model = inv_model
-            self.curiosity_beta = curiosity_beta
-            self.curiosity_lambda = curiosity_lambda
+        keys = ['actor_critic', 'acktr', 'norm_adv', 'use_curiosity', 'value_loss_coef',
+                'entropy_coef', 'max_grad_norm']
+        if use_curiosity:
+            keys += ['fwd_model', 'inv_model', 'curiosity_beta', 'curiosity_lambda']
 
-        self.value_loss_coef = value_loss_coef
-        self.entropy_coef = entropy_coef
-
-        self.max_grad_norm = max_grad_norm
+        for key in keys:
+            setattr(self, key, eval(key))
         
         if not self.use_curiosity:
             if acktr:
@@ -91,8 +84,10 @@ class A2C_ACKTR():
             # ================= Forward loss ===============
             # states -> num_steps*num_processes x 512 
             # actions_onehot -> num_steps*num_processes x 512
-            fwd_preds = self.fwd_model(states, actions_onehot)
-            fwd_loss = 0.5*torch.mean(((fwd_preds - next_states) ** 2).sum(dim=1))
+
+            # Do not update the state representation based on fwd_loss
+            fwd_preds = self.fwd_model(states.detach(), actions_onehot)
+            fwd_loss = 0.5*torch.mean(((fwd_preds - next_states.detach()) ** 2).sum(dim=1))
             # ================= Inverse loss ===============
             # Inverse loss by pairing (s0, s1)->a0, (s1, s2)->a1, ..., (sN-1, sN)->aN-1
             inv_preds = self.inv_model(states, next_states)
@@ -133,8 +128,8 @@ class A2C_ACKTR():
             (value_loss * self.value_loss_coef + action_loss -
              dist_entropy * self.entropy_coef).backward()
         else:
-            pg_term = self.curiosity_lambda*(value_loss * self.value_loss_coef + 
-                action_loss - dist_entropy * self.entropy_coef)
+            pg_term = self.curiosity_lambda * (value_loss * self.value_loss_coef + 
+                                               action_loss - dist_entropy * self.entropy_coef)
             curiosity_term = self.curiosity_beta*fwd_loss + (1-self.curiosity_beta)*inv_loss
             overall_loss = pg_term + curiosity_term
             overall_loss.backward()

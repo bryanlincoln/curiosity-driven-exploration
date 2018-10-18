@@ -63,14 +63,14 @@ class RolloutStorage(object):
     def compute_returns(self, next_value, use_gae, gamma, tau):
         if self.norm_rew:
             # NOTE: Not adding the estimated value after last time step here
-            reward_discounted_sum = torch.zeros(self.returns.size()).to(self.returns.device)
+            r_gamma_sum = torch.zeros(self.returns.size()).to(self.returns.device)
             for step in reversed(range(self.rewards.size(0))):
-                reward_discounted_sum = reward_discounted_sum[step + 1] * \
+                r_gamma_sum = r_gamma_sum[step + 1] * \
                     gamma * self.masks[step + 1] + self.rewards[step]
-            reward_discounted_sum_flat = reward_discounted_sum.view(-1)
-            ret_mean = torch.mean(reward_discounted_sum_flat).detach()
-            ret_std = torch.std(reward_discounted_sum_flat).detach()
-            ret_count= reward_discounted_sum_flat.shape[0]
+            r_gamma_sum_flat = r_gamma_sum.view(-1)
+            ret_mean = torch.mean(r_gamma_sum_flat).detach()
+            ret_std = torch.std(r_gamma_sum_flat).detach()
+            ret_count= r_gamma_sum_flat.shape[0]
             self.ret_running_mean_std.update_from_moments(ret_mean, ret_std ** 2, ret_count)
             self.rewards /= torch.sqrt(self.ret_running_mean_std.var)
 
@@ -108,7 +108,7 @@ class RolloutStorage(object):
             adv_targ = advantages.view(-1, 1)[indices]
 
             yield obs_batch, recurrent_hidden_states_batch, actions_batch, \
-                return_batch, masks_batch, old_action_log_probs_batch, adv_targ
+                return_batch, masks_batch, old_action_log_probs_batch, adv_targ, None, None
 
     def recurrent_generator(self, advantages, num_mini_batch):
         num_processes = self.rewards.size(1)
@@ -159,4 +159,4 @@ class RolloutStorage(object):
             adv_targ = _flatten_helper(T, N, adv_targ)
 
             yield obs_batch, recurrent_hidden_states_batch, actions_batch, \
-                return_batch, masks_batch, old_action_log_probs_batch, adv_targ
+                return_batch, masks_batch, old_action_log_probs_batch, adv_targ, T, N
