@@ -87,7 +87,7 @@ class A2C_ACKTR():
 
             # Do not update the state representation based on fwd_loss
             fwd_preds = self.fwd_model(states.detach(), actions_onehot)
-            fwd_loss = 0.5*torch.mean(((fwd_preds - next_states.detach()) ** 2).sum(dim=1))
+            fwd_loss = 0.5*F.mse_loss(fwd_preds, next_states.detach())
             # ================= Inverse loss ===============
             # Inverse loss by pairing (s0, s1)->a0, (s1, s2)->a1, ..., (sN-1, sN)->aN-1
             inv_preds = self.inv_model(states, next_states)

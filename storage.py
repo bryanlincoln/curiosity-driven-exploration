@@ -65,7 +65,7 @@ class RolloutStorage(object):
             # NOTE: Not adding the estimated value after last time step here
             r_gamma_sum = torch.zeros(self.returns.size()).to(self.returns.device)
             for step in reversed(range(self.rewards.size(0))):
-                r_gamma_sum = r_gamma_sum[step + 1] * \
+                r_gamma_sum[step] = r_gamma_sum[step + 1] * \
                     gamma * self.masks[step + 1] + self.rewards[step]
             r_gamma_sum_flat = r_gamma_sum.view(-1)
             ret_mean = torch.mean(r_gamma_sum_flat).detach()
