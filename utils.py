@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 
+import gym
+import numpy as np
+from envs import make_env
 
 # Necessary for my KFAC implementation.
 class AddBias(nn.Module):
@@ -59,3 +62,41 @@ def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, 
 
     return new_mean, new_var, new_count
 
+def get_env_mean_std(env_id, seed, num_steps=10000):
+    import numpy as np
+    import torch
+    from gym.spaces.box import Box
+    from envs import TransposeImage
+    from baselines.common.atari_wrappers import make_atari, wrap_deepmind
+
+    if env_id.startswith("dm"):
+        _, domain, task = env_id.split('.')
+        env = dm_control2gym.make(domain_name=domain, task_name=task)
+    else:
+        env = gym.make(env_id)
+    is_atari = hasattr(gym.envs, 'atari') and isinstance(
+        env.unwrapped, gym.envs.atari.atari_env.AtariEnv)
+    if is_atari:
+        env = make_atari(env_id)
+    env.seed(seed)
+
+    obs_shape = env.observation_space.shape
+
+    if is_atari:
+        env = wrap_deepmind(env)
+
+    # If the input has shape (W,H,3), wrap for PyTorch convolutions
+    obs_shape = env.observation_space.shape
+    if len(obs_shape) == 3 and obs_shape[2] in [1, 3]:
+        env = TransposeImage(env)
+
+    observations = []
+    obs = env.reset()
+    observations.append(obs)
+    for step in range(num_steps):
+        act = env.action_space.sample()
+        obs, _, done, _ = env.step(act)
+        observations.append(obs) 
+
+    observations = np.stack(observations)
+    return np.mean(observations), np.std(observations)

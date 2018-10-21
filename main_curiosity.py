@@ -17,6 +17,7 @@ import algo
 import tensorboardX
 
 from envs import make_vec_envs
+from utils import get_env_mean_std
 from model import Policy, ForwardModel, InverseModel
 from storage import RolloutStorage
 from arguments import get_args
@@ -69,8 +70,10 @@ def main():
     envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
                         args.gamma, args.log_dir, args.add_timestep, device, False)
 
+    args.obs_mean, args.obs_std = get_env_mean_std(args.env_name, args.seed)
+
     actor_critic = Policy(envs.observation_space.shape, envs.action_space,
-        base_kwargs={'recurrent': args.recurrent_policy})
+            base_kwargs={'recurrent': args.recurrent_policy, 'obs_mean': args.obs_mean, 'obs_std': args.obs_std})
 
     if args.use_curiosity:
         # Works only for discrete actions currently
@@ -144,7 +147,7 @@ def main():
                 action_onehot.scatter_(1, action.view(-1, 1).long(), 1)
                 with torch.no_grad():
                     pred_actor_features = fwd_model(actor_features, action_onehot).detach()
-                    curiosity_rewards = 0.5*torch.sum((pred_actor_features-next_actor_features)**2, dim=1).view(-1, 1)
+                    curiosity_rewards = 0.5*torch.mean(F.mse_loss(pred_actor_features, next_actor_features, reduce=False), dim=1).view(-1, 1)
                 reward = reward + args.curiosity_eta * curiosity_rewards
 
             for info in infos:
