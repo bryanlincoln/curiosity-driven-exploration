@@ -19,10 +19,13 @@ class Policy(nn.Module):
             base_kwargs = {}
 
         if type(obs_space) is dict:
+            print('Mixed Base ')
             self.base = MixedBase(obs_space, **base_kwargs)
         elif len(obs_space.shape) == 3:
+            print('CNN Base ', obs_space.shape)
             self.base = CNNBase(obs_space.shape[0], **base_kwargs)
         elif len(obs_space.shape) == 1:
+            print('MLP Base ', obs_space.shape)
             self.base = MLPBase(obs_space.shape[0], **base_kwargs)
         else:
             raise NotImplementedError
@@ -253,7 +256,9 @@ class CNNBase(NNBase):
         x = self.conv3(x)
         x = self.lrelu3(x)
         x = self.bn3(x)
+        print('X1 ', x.shape)
         x = x.view(x.size(0), -1)
+        print('X2 ', x.shape)
         x = self.lin(x)
         x = self.bn4(x)
 

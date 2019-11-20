@@ -12,6 +12,9 @@ from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
 from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
 from baselines.common.vec_env.vec_normalize import VecNormalize
 
+import real_robots
+from real_wrapper import RealWrapper
+
 try:
     import dm_control2gym
 except ImportError:
@@ -28,24 +31,28 @@ except ImportError:
     pass
 
 
-def make_env(env_id, seed, rank, log_dir, add_timestep, allow_early_resets):
+def make_env(env_id, seed, rank=0, log_dir=None, add_timestep=True, allow_early_resets=False):
     def _thunk():
         if env_id.startswith("dm"):
             _, domain, task = env_id.split('.')
             env = dm_control2gym.make(domain_name=domain, task_name=task)
         else:
             env = gym.make(env_id)
+
         is_atari = hasattr(gym.envs, 'atari') and isinstance(
             env.unwrapped, gym.envs.atari.atari_env.AtariEnv)
         if is_atari:
             env = make_atari(env_id)
         env.seed(seed + rank)
 
-        obs_shape = env.observation_space.shape
+        if env_id == "REALRobot-v0":
+            env = RealWrapper(env)
+        else:
+            obs_shape = env.observation_space.shape
 
-        if add_timestep and len(
-                obs_shape) == 1 and str(env).find('TimeLimit') > -1:
-            env = AddTimestep(env)
+            if add_timestep and len(
+                    obs_shape) == 1 and str(env).find('TimeLimit') > -1:
+                env = AddTimestep(env)
 
         if log_dir is not None:
             env = bench.Monitor(env, os.path.join(log_dir, str(rank)),
@@ -54,25 +61,27 @@ def make_env(env_id, seed, rank, log_dir, add_timestep, allow_early_resets):
         if is_atari:
             env = wrap_deepmind(env)
 
-        # If the input has shape (W,H,3), wrap for PyTorch convolutions
-        obs_shape = env.observation_space.shape
-        if len(obs_shape) == 3 and obs_shape[2] in [1, 3]:
-            env = TransposeImage(env)
+        if env_id != "REALRobot-v0":
+            # If the input has shape (W,H,3), wrap for PyTorch convolutions
+            obs_shape = env.observation_space.shape
+            if len(obs_shape) == 3 and obs_shape[2] in [1, 3]:
+                env = TransposeImage(env)
 
         return env
 
     return _thunk
 
+
 def make_vec_envs(env_name, seed, num_processes, gamma, log_dir, add_timestep, device, allow_early_resets):
     envs = [make_env(env_name, seed, i, log_dir, add_timestep, allow_early_resets)
-                for i in range(num_processes)]
+            for i in range(num_processes)]
 
     if len(envs) > 1:
         envs = SubprocVecEnv(envs)
     else:
         envs = DummyVecEnv(envs)
 
-    if len(envs.observation_space.shape) == 1:
+    if env_name != 'REALRobot-v0' and len(envs.observation_space.shape) == 1:
         if gamma is None:
             envs = VecNormalize(envs, ret=False)
         else:
@@ -80,7 +89,7 @@ def make_vec_envs(env_name, seed, num_processes, gamma, log_dir, add_timestep, d
 
     envs = VecPyTorch(envs, device)
 
-    if len(envs.observation_space.shape) == 3:
+    if env_name != 'REALRobot-v0' and len(envs.observation_space.shape) == 3:
         envs = VecPyTorchFrameStack(envs, 4, device)
 
     return envs
@@ -157,12 +166,14 @@ class VecPyTorchFrameStack(VecEnvWrapper):
         self.stackedobs = np.zeros((venv.num_envs,) + low.shape)
         self.stackedobs = torch.from_numpy(self.stackedobs).float()
         self.stackedobs = self.stackedobs.to(device)
-        observation_space = gym.spaces.Box(low=low, high=high, dtype=venv.observation_space.dtype)
+        observation_space = gym.spaces.Box(
+            low=low, high=high, dtype=venv.observation_space.dtype)
         VecEnvWrapper.__init__(self, venv, observation_space=observation_space)
 
     def step_wait(self):
         obs, rews, news, infos = self.venv.step_wait()
-        self.stackedobs[:, :-self.shape_dim0] = self.stackedobs[:, self.shape_dim0:]
+        self.stackedobs[:, :-
+                        self.shape_dim0] = self.stackedobs[:, self.shape_dim0:]
         for (i, new) in enumerate(news):
             if new:
                 self.stackedobs[i] = 0
