@@ -27,13 +27,13 @@ class Policy(nn.Module):
         else:
             raise NotImplementedError
 
-        if action_space.__class__.__name__ == "Discrete":
+        self.action_space_type = action_space.__class__.__name__
+        if self.action_space_type == "Discrete":
             self.n_actions = action_space.n
-            num_outputs = action_space.n
-            self.dist = Categorical(self.base.output_size, num_outputs)
-        elif action_space.__class__.__name__ == "Box":
-            num_outputs = action_space.shape[0]
-            self.dist = DiagGaussian(self.base.output_size, num_outputs)
+            self.dist = Categorical(self.base.output_size, self.n_actions)
+        elif self.action_space_type == "Box":
+            self.n_actions = action_space.shape[0]
+            self.dist = DiagGaussian(self.base.output_size, self.n_actions)
         else:
             raise NotImplementedError
 
@@ -255,7 +255,8 @@ class CNNBase(NNBase):
         x = self.bn3(x)
         x = x.view(x.size(0), -1)
         x = self.lin(x)
-        x = self.bn4(x)
+        if x.shape[0] > 1:
+            x = self.bn4(x)
 
         if self.is_recurrent:
             x, rnn_hxs = self._forward_gru(x, rnn_hxs, masks)
@@ -310,8 +311,15 @@ class ForwardModel(nn.Module):
     Given s_{t} encoding and a_{t}, it predicts s_{t+1} encoding
     """
 
-    def __init__(self, n_actions, state_size=512, hidden_size=512):
+    def __init__(self, action_space, state_size=512, hidden_size=512):
         super(ForwardModel, self).__init__()
+
+        if action_space.__class__.__name__ == "Discrete":
+            n_actions = action_space.n
+        elif action_space.__class__.__name__ == "Box":
+            n_actions = action_space.shape[0]
+        else:
+            raise NotImplementedError
 
         def init_(m): return init(m,
                                   init_normc_,
@@ -362,8 +370,17 @@ class InverseModel(nn.Module):
     Given s_{t}, s_{t+1} encoding, it predicts a_{t}
     """
 
-    def __init__(self, n_actions, state_size=512, hidden_size=256):
+    def __init__(self, action_space, state_size=512, hidden_size=256):
         super(InverseModel, self).__init__()
+
+        if action_space.__class__.__name__ == "Discrete":
+            n_actions = action_space.n
+        elif action_space.__class__.__name__ == "Box":
+            n_actions = action_space.shape[0]
+        else:
+            raise NotImplementedError
+
+        output_size = int(hidden_size/2)
 
         def init_(m): return init(m,
                                   init_normc_,
@@ -372,9 +389,28 @@ class InverseModel(nn.Module):
         self.main = nn.Sequential(
             init_(nn.Linear(2*state_size, hidden_size)),
             nn.ReLU(inplace=True),
-            init_(nn.Linear(hidden_size, n_actions))
+            init_(nn.Linear(hidden_size, output_size))
         )
+
+        if action_space.__class__.__name__ == "Discrete":
+            n_actions = action_space.n
+            # net's output_size, n_actions
+            self.dist = Categorical(output_size, n_actions)
+        elif action_space.__class__.__name__ == "Box":
+            n_actions = action_space.shape[0]
+            # net's output_size, n_actions
+            self.dist = DiagGaussian(output_size, n_actions)
+        else:
+            raise NotImplementedError
 
     def forward(self, s, sp):
         # s, sp - batch_size x state_size
-        return self.main(torch.cat([s, sp], dim=1))
+        features = self.main(torch.cat([s, sp], dim=1))
+        dist = self.dist(features)
+
+        # if deterministic:
+        action = dist.mode()
+        # else:
+        #    action = dist.sample()
+
+        return action

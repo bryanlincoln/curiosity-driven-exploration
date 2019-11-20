@@ -76,11 +76,10 @@ def main():
                           base_kwargs={'recurrent': args.recurrent_policy, 'obs_mean': args.obs_mean, 'obs_std': args.obs_std})
 
     if args.use_curiosity:
-        # Works only for discrete actions currently
         fwd_model = ForwardModel(
-            envs.action_space.n, state_size=512, hidden_size=256)
+            envs.action_space, state_size=512, hidden_size=256)
         inv_model = InverseModel(
-            envs.action_space.n, state_size=512, hidden_size=256)
+            envs.action_space, state_size=512, hidden_size=256)
         fwd_model.to(device)
         inv_model.to(device)
     else:
@@ -149,16 +148,21 @@ def main():
                 with torch.no_grad():
                     next_actor_features = actor_critic.get_features(
                         obs, recurrent_hidden_states, masks).detach()
+
                 # Augment reward with curiosity rewards
-                action_onehot = torch.zeros(
-                    args.num_processes, envs.action_space.n, device=device)
-                action_onehot.scatter_(1, action.view(-1, 1).long(), 1)
+                if envs.action_space.__class__.__name__ == "Discrete":
+                    action_curiosity = torch.zeros(
+                        args.num_processes, envs.action_space.n, device=device)
+                    action_curiosity.scatter_(1, action.view(-1, 1).long(), 1)
+                elif envs.action_space.__class__.__name__ == "Box":
+                    action_curiosity = action
+
                 with torch.no_grad():
                     pred_actor_features = fwd_model(
-                        actor_features, action_onehot).detach()
+                        actor_features, action_curiosity).detach()
                     curiosity_rewards = 0.5 * \
                         torch.mean(F.mse_loss(
-                            pred_actor_features, next_actor_features, reduce=False), dim=1).view(-1, 1)
+                            pred_actor_features, next_actor_features, reduction='none'), dim=1).view(-1, 1)
                 reward = reward + args.curiosity_eta * curiosity_rewards
 
             for info in infos:

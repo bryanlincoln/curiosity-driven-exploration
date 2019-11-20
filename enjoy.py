@@ -2,6 +2,7 @@ import argparse
 import os
 import types
 
+import gym
 import numpy as np
 import torch
 
@@ -10,6 +11,8 @@ from baselines.common.vec_env.vec_normalize import VecNormalize
 from envs import VecPyTorch, make_vec_envs
 
 parser = argparse.ArgumentParser(description='RL')
+parser.add_argument('--algo', default='ppo',
+                    help='algorithm to use: a2c | ppo | acktr')
 parser.add_argument('--seed', type=int, default=1,
                     help='random seed (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10,
@@ -22,12 +25,12 @@ parser.add_argument('--add-timestep', action='store_true', default=False,
                     help='add timestep to observations')
 args = parser.parse_args()
 
-env = make_vec_envs(args.env_name, args.seed + 1000, 1,
-                            None, None, args.add_timestep, device='cpu')
+# env = make_vec_envs(args.env_name, args.seed + 1000, 1, None, None, args.add_timestep, device = 'cpu', allow_early_resets = True)
+env = gym.make(args.env_name)
 
 # Get a render function
-render_func = None
-tmp_env = env
+render_func = env.render
+"""tmp_env = env
 while True:
     if hasattr(tmp_env, 'envs'):
         render_func = tmp_env.envs[0].render
@@ -38,25 +41,28 @@ while True:
         tmp_env = tmp_env.env
     else:
         break
-
+"""
 # We need to use the same statistics for normalization as used in training
-actor_critic, ob_rms = \
-            torch.load(os.path.join(args.load_dir, args.env_name + ".pt"))
+actor_critic, ob_rms = torch.load(os.path.join(
+    args.load_dir, args.algo, args.env_name + ".pt"))
 
+"""
 if isinstance(env.venv, VecNormalize):
     env.venv.ob_rms = ob_rms
 
     # An ugly hack to remove updates
     def _obfilt(self, obs):
         if self.ob_rms:
-            obs = np.clip((obs - self.ob_rms.mean) / np.sqrt(self.ob_rms.var + self.epsilon), -self.clipob, self.clipob)
+            obs = np.clip((obs - self.ob_rms.mean) / np.sqrt(self.ob_rms.var +
+                                                             self.epsilon), -self.clipob, self.clipob)
             return obs
         else:
             return obs
 
     env.venv._obfilt = types.MethodType(_obfilt, env.venv)
-
-recurrent_hidden_states = torch.zeros(1, actor_critic.recurrent_hidden_state_size)
+"""
+recurrent_hidden_states = torch.zeros(
+    1, actor_critic.recurrent_hidden_state_size)
 masks = torch.zeros(1, 1)
 
 if render_func is not None:

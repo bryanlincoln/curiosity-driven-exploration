@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+
 class PPO():
     def __init__(self,
                  actor_critic,
@@ -39,7 +40,8 @@ class PPO():
         self.max_grad_norm = max_grad_norm
 
         if not self.use_curiosity:
-            self.optimizer = optim.Adam(actor_critic.parameters(), lr=lr, eps=eps)
+            self.optimizer = optim.Adam(
+                actor_critic.parameters(), lr=lr, eps=eps)
         else:
             self.optimizer = optim.Adam([{'params': actor_critic.parameters()},
                                          {'params': fwd_model.parameters()},
@@ -69,8 +71,8 @@ class PPO():
 
             for sample in data_generator:
                 obs_batch, recurrent_hidden_states_batch, actions_batch, \
-                   return_batch, masks_batch, old_action_log_probs_batch, \
-                        adv_targ, T, N = sample
+                    return_batch, masks_batch, old_action_log_probs_batch, \
+                    adv_targ, T, N = sample
 
                 # Reshape to do in a single forward pass for all steps
                 if not self.use_curiosity:
@@ -82,44 +84,67 @@ class PPO():
                         obs_batch, recurrent_hidden_states_batch,
                         masks_batch, actions_batch)
 
-                ratio = torch.exp(action_log_probs - old_action_log_probs_batch)
+                ratio = torch.exp(action_log_probs -
+                                  old_action_log_probs_batch)
                 surr1 = ratio * adv_targ
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_param,
-                                           1.0 + self.clip_param) * adv_targ
+                                    1.0 + self.clip_param) * adv_targ
                 action_loss = -torch.min(surr1, surr2).mean()
 
                 value_loss = F.mse_loss(return_batch, values)
 
                 if self.use_curiosity:
-                    curr_states = actor_features.view(T, N, -1)[:-1].view((T-1)*N, -1)
-                    next_states = actor_features.view(T, N, -1)[ 1:].view((T-1)*N, -1)
-                    acts = actions_batch.view(T, N, -1)[:-1]
-                    acts_one_hot = torch.zeros(T-1, N, self.actor_critic.n_actions).to(device)
-                    acts_one_hot.scatter_(2, acts, 1)
-                    acts_one_hot = acts_one_hot.view((T-1)*N, -1)
-                    acts = acts.view(-1)
+                    curr_states = actor_features.view(
+                        T, N, -1)[:-1].view((T-1)*N, -1)
+                    next_states = actor_features.view(
+                        T, N, -1)[1:].view((T-1)*N, -1)
+
+                    if self.actor_critic.action_space_type == "Discrete":
+                        acts = actions_batch.view(T, N, -1)[:-1]
+
+                        acts_curiosity = torch.zeros(
+                            T-1, N, self.actor_critic.n_actions).to(device)
+                        acts_curiosity.scatter_(2, acts, 1)
+                        acts_curiosity = acts_curiosity.view((T-1)*N, -1)
+
+                        acts = acts.view(-1)
+                    elif self.actor_critic.action_space_type == "Box":
+                        acts = actions_batch[:-1]
+
+                        acts_curiosity = acts
+
                     # Forward prediction loss
-                    pred_next_states = self.fwd_model(curr_states.detach(), acts_one_hot)
-                    fwd_loss = 0.5*F.mse_loss(pred_next_states, next_states.detach())
+                    pred_next_states = self.fwd_model(
+                        curr_states.detach(), acts_curiosity)
+                    fwd_loss = 0.5 * \
+                        F.mse_loss(pred_next_states, next_states.detach())
                     # Inverse prediction loss
                     pred_acts = self.inv_model(curr_states, next_states)
-                    inv_loss = F.cross_entropy(pred_acts, acts.long())
+
+                    if self.actor_critic.action_space_type == "Discrete":
+                        inv_loss = F.cross_entropy(pred_acts, acts.long())
+                    elif self.actor_critic.action_space_type == "Box":
+                        inv_loss = F.mse_loss(pred_acts, acts)
 
                 self.optimizer.zero_grad()
                 if not self.use_curiosity:
                     (value_loss * self.value_loss_coef + action_loss -
                      dist_entropy * self.entropy_coef).backward()
                 else:
-                    pg_term = self.curiosity_lambda * (value_loss * self.value_loss_coef + 
+                    pg_term = self.curiosity_lambda * (value_loss * self.value_loss_coef +
                                                        action_loss - dist_entropy * self.entropy_coef)
-                    curiosity_term = self.curiosity_beta*fwd_loss + (1-self.curiosity_beta)*inv_loss
+                    curiosity_term = self.curiosity_beta * \
+                        fwd_loss + (1-self.curiosity_beta)*inv_loss
                     overall_loss = pg_term + curiosity_term
                     overall_loss.backward()
                 # Gradient clipping
-                nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(
+                    self.actor_critic.parameters(), self.max_grad_norm)
                 if self.use_curiosity:
-                    nn.utils.clip_grad_norm_(self.fwd_model.parameters(), self.max_grad_norm)
-                    nn.utils.clip_grad_norm_(self.inv_model.parameters(), self.max_grad_norm)
+                    nn.utils.clip_grad_norm_(
+                        self.fwd_model.parameters(), self.max_grad_norm)
+                    nn.utils.clip_grad_norm_(
+                        self.inv_model.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
                 value_loss_epoch += value_loss.item()
